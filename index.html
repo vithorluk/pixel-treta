@@ -7,16 +7,20 @@
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: monospace; color: #fff; }
   canvas { position: absolute; inset: 0; margin: auto; image-rendering: pixelated; image-rendering: crisp-edges; }
-  #join { position: absolute; right: 16px; bottom: 16px; background: rgba(0,0,0,.8); border: 2px solid #ffd23f; padding: 10px; text-align: center; font-size: 14px; }
-  #join svg { width: 150px; height: 150px; display: block; margin: 0 auto 6px; background: #fff; }
-  #join b { color: #ffd23f; font-size: 16px; }
-  #tip { position: absolute; left: 16px; bottom: 16px; font-size: 12px; opacity: .6; }
+  #join { position: absolute; right: 8px; bottom: 8px; background: rgba(0,0,0,.75); border: 2px solid #ffd23f; padding: 6px 10px; text-align: center; font-size: 13px; }
+  #join svg { width: 14vh; height: 14vh; display: block; margin: 0 auto 4px; background: #fff; }
+  #join b { color: #ffd23f; }
+  #join.big { right: auto; bottom: auto; left: 50%; top: 77%; transform: translate(-50%, -50%); font-size: 16px; padding: 10px 14px; }
+  #join.big svg { width: 24vh; height: 24vh; }
+  #join.small { border-width: 1px; opacity: .7; font-size: 11px; padding: 3px 6px; }
+  #join.small #qr, #join.small .l { display: none; }
+  #tip { position: absolute; left: 8px; bottom: 8px; font-size: 11px; opacity: .6; }
 </style>
 </head>
 <body>
 <canvas id="cv" width="384" height="216"></canvas>
-<div id="join"><div id="qr"></div><div>Aponte a câmera ou abra</div><b id="url">conectando…</b><div>Sala: <b id="code"></b></div></div>
-<div id="tip">Clique para tela cheia e som · tecla H esconde o QR</div>
+<div id="join" class="big"><div id="qr"></div><div class="l">Aponte a câmera ou abra</div><b class="l" id="url">conectando…</b><div>Sala: <b id="code"></b></div></div>
+<div id="tip">Clique para tela cheia e som · H mostra o QR · M troca de fase</div>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script src="game.js"></script>
@@ -25,8 +29,8 @@ const { Game, W, H } = PixelTreta;
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
 ctx.imageSmoothingEnabled = false;
 function fit() {
-  const s = Math.max(1, Math.floor(Math.min(innerWidth / W, innerHeight / H)));
-  cv.style.width = W * s + 'px'; cv.style.height = H * s + 'px';
+  const s = Math.min(innerWidth / W, innerHeight / H);
+  cv.style.width = Math.floor(W * s) + 'px'; cv.style.height = Math.floor(H * s) + 'px';
 }
 addEventListener('resize', fit); fit();
 
@@ -43,15 +47,21 @@ function tone(freq, dur, type, vol, slide) {
 const SFX = {
   shot: () => tone(700, .08, 'square', .08, 120), rocket: () => tone(200, .3, 'sawtooth', .1, 60),
   punch: () => tone(180, .06, 'square', .08, 90), hit: () => tone(320, .07, 'triangle', .12, 110),
-  boom: () => tone(120, .5, 'sawtooth', .25, 25), crate: () => tone(260, .12, 'square', .08, 70),
+  splash: () => tone(500, .3, 'sine', .12, 80), boom: () => tone(120, .5, 'sawtooth', .25, 25), crate: () => tone(260, .12, 'square', .08, 70),
   jump: () => tone(300, .09, 'square', .04, 620), pick: () => tone(660, .1, 'square', .07, 1300),
   dead: () => tone(400, .4, 'square', .1, 50), win: () => { tone(523, .12, 'square', .1); setTimeout(() => tone(784, .25, 'square', .1), 130); }
 };
 addEventListener('click', () => {
   if (!ac) try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
   if (!document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
+  document.getElementById('tip').hidden = true;
 });
-addEventListener('keydown', e => { if (e.key.toLowerCase() === 'h') { const j = document.getElementById('join'); j.hidden = !j.hidden; } });
+let showQr = false;
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k === 'h') showQr = !showQr;
+  if (k === 'm') game.resetRound(true);
+});
 
 const game = new Game();
 const pads = new Map(); // id -> { conn, seen }
@@ -93,11 +103,14 @@ openRoom();
 // controle que parou de responder sai do jogo
 setInterval(() => { const now = performance.now(); for (const [id, p] of pads) if (now - p.seen > 6000) drop(id); }, 1000);
 
+const joinEl = document.getElementById('join');
 let last = performance.now(), acc = 0;
 function loop(now) {
   acc += Math.min(100, now - last); last = now;
   while (acc >= 1000 / 60) { game.step(); acc -= 1000 / 60; }
   game.render(ctx);
+  const n = game.players.size, cls = n === 0 ? 'big' : (n === 1 || showQr) ? 'mid' : 'small';
+  if (joinEl.className !== cls) joinEl.className = cls;
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
