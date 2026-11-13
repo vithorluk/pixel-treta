@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Treta</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: monospace; color: #fff; }
+  canvas { position: absolute; inset: 0; margin: auto; image-rendering: pixelated; image-rendering: crisp-edges; }
+  #join { position: absolute; right: 16px; bottom: 16px; background: rgba(0,0,0,.8); border: 2px solid #ffd23f; padding: 10px; text-align: center; font-size: 14px; }
+  #join svg { width: 150px; height: 150px; display: block; margin: 0 auto 6px; background: #fff; }
+  #join b { color: #ffd23f; font-size: 16px; }
+  #tip { position: absolute; left: 16px; bottom: 16px; font-size: 12px; opacity: .6; }
+</style>
+</head>
+<body>
+<canvas id="cv" width="384" height="216"></canvas>
+<div id="join"><div id="qr"></div><div>Aponte a câmera ou abra</div><b id="url">conectando…</b><div>Sala: <b id="code"></b></div></div>
+<div id="tip">Clique para tela cheia e som · tecla H esconde o QR</div>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="game.js"></script>
+<script>
+const { Game, W, H } = PixelTreta;
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+function fit() {
+  const s = Math.max(1, Math.floor(Math.min(innerWidth / W, innerHeight / H)));
+  cv.style.width = W * s + 'px'; cv.style.height = H * s + 'px';
+}
+addEventListener('resize', fit); fit();
+
+// som simples (liga depois do primeiro clique)
+let ac = null;
+function tone(freq, dur, type, vol, slide) {
+  if (!ac) return;
+  const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(ac.destination); o.start(t); o.stop(t + dur);
+}
+const SFX = {
+  shot: () => tone(700, .08, 'square', .08, 120), rocket: () => tone(200, .3, 'sawtooth', .1, 60),
+  punch: () => tone(180, .06, 'square', .08, 90), hit: () => tone(320, .07, 'triangle', .12, 110),
+  boom: () => tone(120, .5, 'sawtooth', .25, 25), crate: () => tone(260, .12, 'square', .08, 70),
+  jump: () => tone(300, .09, 'square', .04, 620), pick: () => tone(660, .1, 'square', .07, 1300),
+  dead: () => tone(400, .4, 'square', .1, 50), win: () => { tone(523, .12, 'square', .1); setTimeout(() => tone(784, .25, 'square', .1), 130); }
+};
+addEventListener('click', () => {
+  if (!ac) try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
+});
+addEventListener('keydown', e => { if (e.key.toLowerCase() === 'h') { const j = document.getElementById('join'); j.hidden = !j.hidden; } });
+
+const game = new Game();
+const pads = new Map(); // id -> { conn, seen }
+let nextId = 1, peer, code;
+const toPad = (id, m) => { const p = pads.get(id); if (p && p.conn.open) p.conn.send(m); };
+game.onSfx = k => SFX[k] && SFX[k]();
+game.onEvent = (id, k) => toPad(id, { t: 'fx', k });
+function drop(id) { const p = pads.get(id); if (!p) return; pads.delete(id); game.removePlayer(id); try { p.conn.close(); } catch (e) {} }
+function openRoom() {
+  const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  code = ''; for (let i = 0; i < 4; i++) code += abc[Math.random() * abc.length | 0];
+  peer = new Peer('pixeltreta-' + code);
+  peer.on('open', () => {
+    const url = new URL('c.html?r=' + code, location.href).href;
+    const q = qrcode(0, 'M'); q.addData(url); q.make();
+    document.getElementById('qr').innerHTML = q.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+    document.getElementById('url').textContent = url.replace(/^https?:\/\//, '');
+    document.getElementById('code').textContent = code;
+  });
+  peer.on('connection', conn => {
+    const id = nextId++;
+    conn.on('data', m => {
+      const p = pads.get(id);
+      if (m.t === 'join' && !p) {
+        pads.set(id, { conn, seen: performance.now() });
+        const pl = game.addPlayer(id, String(m.name || 'P' + id).slice(0, 8).toUpperCase());
+        conn.send({ t: 'you', color: pl.color });
+      } else if (m.t === 'in' && p) { p.seen = performance.now(); game.setInput(id, m.b | 0); }
+    });
+    conn.on('close', () => drop(id)); conn.on('error', () => drop(id));
+  });
+  peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
+  peer.on('error', e => {
+    if (e.type === 'unavailable-id') { peer.destroy(); openRoom(); }
+    else if (!peer.open) document.getElementById('url').textContent = 'sem conexão, recarregue a página';
+  });
+}
+openRoom();
+// controle que parou de responder sai do jogo
+setInterval(() => { const now = performance.now(); for (const [id, p] of pads) if (now - p.seen > 6000) drop(id); }, 1000);
+
+let last = performance.now(), acc = 0;
+function loop(now) {
+  acc += Math.min(100, now - last); last = now;
+  while (acc >= 1000 / 60) { game.step(); acc -= 1000 / 60; }
+  game.render(ctx);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
